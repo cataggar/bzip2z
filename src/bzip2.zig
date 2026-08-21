@@ -102,9 +102,39 @@ pub const Error = error{
 	StreamCrcMismatch,
 	UnexpectedEof,
 	OutputOverflow,
+	OutputLimitExceeded,
+	TrailingData,
 	OutOfMemory,
 	InvalidBwtIndex,
 };
+
+pub const StreamMode = enum {
+	/// Decode exactly one stream and reject any byte after its footer.
+	single,
+	/// Decode all concatenated streams. This preserves the historical behavior.
+	concatenated,
+};
+
+fn legacyDecompressError(err: anyerror) Error {
+	return switch (err) {
+		Error.InvalidMagic => Error.InvalidMagic,
+		Error.InvalidBlockSize => Error.InvalidBlockSize,
+		Error.InvalidBlockHeader => Error.InvalidBlockHeader,
+		Error.InvalidFooter => Error.InvalidFooter,
+		Error.CorruptData => Error.CorruptData,
+		Error.HuffmanOverflow => Error.HuffmanOverflow,
+		Error.InvalidSelector => Error.InvalidSelector,
+		Error.BlockCrcMismatch => Error.BlockCrcMismatch,
+		Error.StreamCrcMismatch => Error.StreamCrcMismatch,
+		Error.UnexpectedEof => Error.UnexpectedEof,
+		Error.OutputOverflow => Error.OutputOverflow,
+		Error.OutputLimitExceeded => Error.OutputLimitExceeded,
+		Error.TrailingData => Error.TrailingData,
+		Error.OutOfMemory => Error.OutOfMemory,
+		Error.InvalidBwtIndex => Error.InvalidBwtIndex,
+		else => Error.CorruptData,
+	};
+}
 
 pub const CompressOptions = struct {
 	/// Block size level (1..9). Default is 9.
@@ -136,6 +166,11 @@ pub const CompressOptions = struct {
 };
 
 pub const DecompressOptions = struct {
+	/// Controls whether concatenated bzip2 streams are accepted.
+	stream_mode: StreamMode = .concatenated,
+	/// Maximum number of decompressed bytes. The block that would exceed this
+	/// limit is rejected before any of its bytes are written.
+	max_output_bytes: ?usize = null,
 	/// Number of worker threads for pbzip2-style multi-stream. 0 = auto, 1 = single-threaded.
 	threads: usize = 1,
 	/// Enable parallel decompression for concatenated streams.
@@ -153,6 +188,17 @@ pub const DecompressOptions = struct {
 		}
 		return self.threads;
 	}
+};
+
+pub const StreamingDecompressOptions = struct {
+	/// Strict single-stream decoding is the safe default for materialization.
+	stream_mode: StreamMode = .single,
+	/// Maximum number of decompressed bytes. The block that would exceed this
+	/// limit is rejected before any of its bytes are written.
+	max_output_bytes: ?usize = null,
+	on_progress: ?*const fn (u64, u64, ?*anyopaque) callconv(.c) void = null,
+	progress_userdata: ?*anyopaque = null,
+	progress_bytes_total: u64 = 0,
 };
 
 // ============ CRC32 for bzip2 ============
@@ -226,6 +272,29 @@ fn readByteAny(reader: anytype) anyerror!u8 {
 	return buf[0];
 }
 
+fn writeAny(writer: anytype, buffer: []const u8) anyerror!usize {
+	const WriterType = @TypeOf(writer);
+	const Child = switch (@typeInfo(WriterType)) {
+		.pointer => |info| info.child,
+		else => WriterType,
+	};
+
+	if (@hasDecl(Child, "write")) {
+		return writer.write(buffer);
+	}
+
+	@compileError("writer type lacks write");
+}
+
+fn writeAllAny(writer: anytype, buffer: []const u8) anyerror!void {
+	var offset: usize = 0;
+	while (offset < buffer.len) {
+		const written = try writeAny(writer, buffer[offset..]);
+		if (written == 0) return error.WriteFailed;
+		offset += written;
+	}
+}
+
 fn encodedLenForRun(run_len: usize) usize {
 	if (run_len == 0) return 0;
 	if (run_len >= 4) return 5;
@@ -252,12 +321,12 @@ pub fn BitReader(comptime ReaderType: type) type {
 		}
 
 		/// Read n bits (up to 32) from the stream
-		pub fn readBits(self: *Self, comptime n: u6) Error!u32 {
+		pub fn readBits(self: *Self, comptime n: u6) !u32 {
 			// Ensure we have enough bits
 			while (self.bits_in_buffer < n) {
 				const byte = readByteAny(self.reader) catch |err| {
 					if (err == error.EndOfStream) return Error.UnexpectedEof;
-					return Error.CorruptData;
+					return err;
 				};
 				self.buffer = (self.buffer << 8) | byte;
 				self.bits_in_buffer += 8;
@@ -270,12 +339,12 @@ pub fn BitReader(comptime ReaderType: type) type {
 		}
 
 		/// Read a variable number of bits (up to 32)
-		pub fn readBitsVar(self: *Self, n: u6) Error!u32 {
+		pub fn readBitsVar(self: *Self, n: u6) !u32 {
 			// Ensure we have enough bits
 			while (self.bits_in_buffer < n) {
 				const byte = readByteAny(self.reader) catch |err| {
 					if (err == error.EndOfStream) return Error.UnexpectedEof;
-					return Error.CorruptData;
+					return err;
 				};
 				self.buffer = (self.buffer << 8) | byte;
 				self.bits_in_buffer += 8;
@@ -295,16 +364,16 @@ pub fn BitReader(comptime ReaderType: type) type {
 		}
 
 		/// Read a single bit
-		pub fn readBit(self: *Self) Error!u1 {
+		pub fn readBit(self: *Self) !u1 {
 			return @truncate(try self.readBits(1));
 		}
 
 		/// Peek at next n bits without consuming them (n must be <= 32)
-		pub fn peekBits(self: *Self, n: u6) Error!u32 {
+		pub fn peekBits(self: *Self, n: u6) !u32 {
 			while (self.bits_in_buffer < n) {
 				const byte = readByteAny(self.reader) catch |err| {
 					if (err == error.EndOfStream) return Error.UnexpectedEof;
-					return Error.CorruptData;
+					return err;
 				};
 				self.buffer = (self.buffer << 8) | byte;
 				self.bits_in_buffer += 8;
@@ -414,7 +483,7 @@ const HuffmanTable = struct {
 	}
 
 	/// Decode one symbol from bit reader
-	pub fn decode(self: *const HuffmanTable, comptime ReaderType: type, bits: *BitReader(ReaderType)) Error!u16 {
+	pub fn decode(self: *const HuffmanTable, comptime ReaderType: type, bits: *BitReader(ReaderType)) !u16 {
 		// Fast path: peek HUFF_FAST_BITS and lookup table
 		if (bits.peekBits(HUFF_FAST_BITS)) |peek| {
 			const fast_len = self.fast_lengths[peek];
@@ -483,6 +552,7 @@ pub const Decompressor = struct {
 	progress_userdata: ?*anyopaque = null,
 	progress_bytes_total: u64 = 0,
 	progress_bytes_processed: u64 = 0,
+	output_limit_remaining: ?usize = null,
 
 	pub fn init(allocator: Allocator) !Decompressor {
 		const block = try allocator.alloc(u8, MAX_BLOCK_SIZE + 1);
@@ -527,11 +597,37 @@ pub const Decompressor = struct {
 
 	/// Decompress bzip2 data from reader to writer
 	pub fn decompress(self: *Decompressor, reader: anytype, writer: anytype) Error!void {
-		return self.decompressInternal(reader, writer, true);
+		return self.decompressWithOptions(reader, writer, .{}) catch |err| return legacyDecompressError(err);
+	}
+
+	/// Decompress bzip2 data from a reader to a writer with bounded output and
+	/// explicit single-stream or concatenated-stream handling.
+	pub fn decompressWithOptions(
+		self: *Decompressor,
+		reader: anytype,
+		writer: anytype,
+		options: DecompressOptions,
+	) !void {
+		self.on_progress = options.on_progress;
+		self.progress_userdata = options.progress_userdata;
+		self.progress_bytes_total = options.progress_bytes_total;
+		self.progress_bytes_processed = 0;
+		self.output_limit_remaining = options.max_output_bytes;
+		return self.decompressInternalWithMode(reader, writer, true, options.stream_mode);
 	}
 
 	/// Decompress bzip2 data from reader to writer, optionally checking CRC
 	pub fn decompressInternal(self: *Decompressor, reader: anytype, writer: anytype, check_crc: bool) Error!void {
+		return self.decompressInternalWithMode(reader, writer, check_crc, .concatenated) catch |err| return legacyDecompressError(err);
+	}
+
+	fn decompressInternalWithMode(
+		self: *Decompressor,
+		reader: anytype,
+		writer: anytype,
+		check_crc: bool,
+		stream_mode: StreamMode,
+	) !void {
 		const ReaderType = @TypeOf(reader);
 		var bits = BitReader(ReaderType).init(reader);
 		var seen_stream = false;
@@ -594,8 +690,11 @@ pub const Decompressor = struct {
 				try self.readBlock(ReaderType, &bits);
 				try self.decodeBlockInternal(check_crc);
 
-				// Write decompressed output
-				_ = writer.write(self.output[0..self.output_len]) catch return Error.CorruptData;
+				// Publish only complete blocks that fit within the caller's limit.
+				try writeAllAny(writer, self.output[0..self.output_len]);
+				if (self.output_limit_remaining) |remaining| {
+					self.output_limit_remaining = remaining - self.output_len;
+				}
 
 				// Fire progress callback
 				self.progress_bytes_processed += self.output_len;
@@ -608,10 +707,17 @@ pub const Decompressor = struct {
 			}
 
 			bits.alignToByte();
+			if (stream_mode == .single) {
+				_ = readByteAny(bits.reader) catch |err| {
+					if (err == error.EndOfStream) return;
+					return err;
+				};
+				return Error.TrailingData;
+			}
 		}
 	}
 
-	fn readBlock(self: *Decompressor, comptime ReaderType: type, bits: *BitReader(ReaderType)) Error!void {
+	fn readBlock(self: *Decompressor, comptime ReaderType: type, bits: *BitReader(ReaderType)) !void {
 		// Block CRC (32 bits)
 		self.stored_block_crc = try bits.readBits(32);
 
@@ -646,7 +752,7 @@ pub const Decompressor = struct {
 		try self.readCompressedData(ReaderType, bits);
 	}
 
-	fn readSymbolMap(self: *Decompressor, comptime ReaderType: type, bits: *BitReader(ReaderType)) Error!void {
+	fn readSymbolMap(self: *Decompressor, comptime ReaderType: type, bits: *BitReader(ReaderType)) !void {
 		// First level: 16-bit bitmap of which 16-symbol groups are used
 		const group_bitmap: u16 = @truncate(try bits.readBits(16));
 
@@ -669,7 +775,7 @@ pub const Decompressor = struct {
 		}
 	}
 
-	fn readSelectors(self: *Decompressor, comptime ReaderType: type, bits: *BitReader(ReaderType)) Error!void {
+	fn readSelectors(self: *Decompressor, comptime ReaderType: type, bits: *BitReader(ReaderType)) !void {
 		// MTF state for selector decoding
 		var mtf: [MAX_GROUPS]u8 = undefined;
 		for (0..self.num_groups) |i| {
@@ -699,7 +805,7 @@ pub const Decompressor = struct {
 		}
 	}
 
-	fn readHuffmanTrees(self: *Decompressor, comptime ReaderType: type, bits: *BitReader(ReaderType)) Error!void {
+	fn readHuffmanTrees(self: *Decompressor, comptime ReaderType: type, bits: *BitReader(ReaderType)) !void {
 		const alpha_size = self.num_in_use + 2; // +2 for RUNA and RUNB
 
 		for (0..self.num_groups) |group| {
@@ -734,7 +840,7 @@ pub const Decompressor = struct {
 		}
 	}
 
-	fn readCompressedData(self: *Decompressor, comptime ReaderType: type, bits: *BitReader(ReaderType)) Error!void {
+	fn readCompressedData(self: *Decompressor, comptime ReaderType: type, bits: *BitReader(ReaderType)) !void {
 		const eob: u16 = @intCast(self.num_in_use + 1); // End of block symbol
 
 		// MTF state for decoding
@@ -770,7 +876,7 @@ pub const Decompressor = struct {
 
 		// Helper to decode next symbol
 		const decodeNext = struct {
-			fn call(d: *Decompressor, gpos: *usize, sidx: *usize, b: *BitReader(ReaderType)) Error!u16 {
+			fn call(d: *Decompressor, gpos: *usize, sidx: *usize, b: *BitReader(ReaderType)) !u16 {
 				const table = try getTable(d, sidx.*);
 				advanceSlot(gpos, sidx);
 				return table.decode(ReaderType, b);
@@ -896,6 +1002,9 @@ pub const Decompressor = struct {
 
 		// First pass: compute expanded size
 		const needed = self.computeRleExpandedSize() orelse return Error.CorruptData;
+		if (self.output_limit_remaining) |remaining| {
+			if (needed > remaining) return Error.OutputLimitExceeded;
+		}
 
 		// Grow buffers if expansion exceeds current capacity
 		if (needed > self.block.len) {
@@ -2901,7 +3010,11 @@ pub fn decompressNoCrc(allocator: Allocator, input: []const u8) ![]u8 {
 
 /// Decompress with options (parallel concatenated stream decode when enabled).
 pub fn decompressWithOptions(allocator: Allocator, input: []const u8, options: DecompressOptions) ![]u8 {
-	if (!options.parallel or options.resolvedThreads() <= 1) {
+	if (!options.parallel or
+		options.resolvedThreads() <= 1 or
+		options.stream_mode == .single or
+		options.max_output_bytes != null)
+	{
 		return decompressInternalWithOptions(allocator, input, true, options);
 	}
 
@@ -2925,22 +3038,42 @@ fn decompressInternal(allocator: Allocator, input: []const u8, check_crc: bool) 
 fn decompressInternalWithOptions(allocator: Allocator, input: []const u8, check_crc: bool, options: DecompressOptions) ![]u8 {
 	var decompressor = try Decompressor.init(allocator);
 	defer decompressor.deinit();
-	decompressor.on_progress = options.on_progress;
-	decompressor.progress_userdata = options.progress_userdata;
-	decompressor.progress_bytes_total = options.progress_bytes_total;
-
 	var input_reader: std.Io.Reader = .fixed(input);
 	var output_list: std.ArrayListUnmanaged(u8) = .empty;
 	errdefer output_list.deinit(allocator);
 
 	var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, &output_list);
-	decompressor.decompressInternal(&input_reader, &aw.writer, check_crc) catch |err| {
+	decompressor.on_progress = options.on_progress;
+	decompressor.progress_userdata = options.progress_userdata;
+	decompressor.progress_bytes_total = options.progress_bytes_total;
+	decompressor.progress_bytes_processed = 0;
+	decompressor.output_limit_remaining = options.max_output_bytes;
+	decompressor.decompressInternalWithMode(&input_reader, &aw.writer, check_crc, options.stream_mode) catch |err| {
 		output_list = aw.toArrayList();
 		return err;
 	};
 	output_list = aw.toArrayList();
 
 	return output_list.toOwnedSlice(allocator);
+}
+
+/// Stream bzip2 data from any compatible reader to any compatible writer.
+/// Reader and writer errors are returned unchanged.
+pub fn decompressStream(
+	allocator: Allocator,
+	reader: anytype,
+	writer: anytype,
+	options: StreamingDecompressOptions,
+) !void {
+	var decompressor = try Decompressor.init(allocator);
+	defer decompressor.deinit();
+	try decompressor.decompressWithOptions(reader, writer, .{
+		.stream_mode = options.stream_mode,
+		.max_output_bytes = options.max_output_bytes,
+		.on_progress = options.on_progress,
+		.progress_userdata = options.progress_userdata,
+		.progress_bytes_total = options.progress_bytes_total,
+	});
 }
 
 /// Decompress a file to a writer, optionally using parallel multi-stream decode.
@@ -2953,12 +3086,16 @@ pub fn decompressFileToWriterWithOptions(
 	const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
 	defer file.close(std.Io.Threaded.global_single_threaded.io());
 
-	if (!options.parallel or options.resolvedThreads() <= 1) {
+	if (!options.parallel or
+		options.resolvedThreads() <= 1 or
+		options.stream_mode == .single or
+		options.max_output_bytes != null)
+	{
 		var reader_buf: [64 * 1024]u8 = undefined;
 		var reader = file.reader(std.Io.Threaded.global_single_threaded.io(), &reader_buf);
 		var decompressor = try Decompressor.init(allocator);
 		defer decompressor.deinit();
-		try decompressor.decompress(&reader.interface, writer);
+		try decompressor.decompressWithOptions(&reader.interface, writer, options);
 		return;
 	}
 
@@ -2971,7 +3108,7 @@ pub fn decompressFileToWriterWithOptions(
 		var reader = file.reader(std.Io.Threaded.global_single_threaded.io(), &reader_buf);
 		var decompressor = try Decompressor.init(allocator);
 		defer decompressor.deinit();
-		try decompressor.decompress(&reader.interface, writer);
+		try decompressor.decompressWithOptions(&reader.interface, writer, options);
 		return;
 	}
 
@@ -3252,7 +3389,7 @@ fn fileStreamWorkerLoop(state: *FileStreamWorkerState) void {
 
 		var output: std.ArrayListUnmanaged(u8) = .empty;
 		var aw: std.Io.Writer.Allocating = .fromArrayList(state.allocator, &output);
-		const result = decompressor.decompressInternal(&reader, &aw.writer, state.check_crc);
+		const result = decompressor.decompressInternalWithMode(&reader, &aw.writer, state.check_crc, .single);
 		output = aw.toArrayList();
 		if (result) |_| {
 			_ = state.results.enqueue(.{ .index = task_opt.index, .result = output.toOwnedSlice(state.allocator) });
@@ -3280,7 +3417,7 @@ fn decompressFileParallel(
 		var reader = file.reader(std.Io.Threaded.global_single_threaded.io(), &reader_buf);
 		var decompressor = try Decompressor.init(allocator);
 		defer decompressor.deinit();
-		try decompressor.decompress(&reader.interface, writer);
+		try decompressor.decompressWithOptions(&reader.interface, writer, options);
 		return;
 	}
 

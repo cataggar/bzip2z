@@ -192,6 +192,164 @@ test "detect invalid block size" {
 	try testing.expectError(bzip2.Error.InvalidBlockSize, result);
 }
 
+const FailingReader = struct {
+	data: []const u8,
+	position: usize = 0,
+	fail_at: usize,
+
+	pub fn read(self: *FailingReader, buffer: []u8) error{ReaderFailure}!usize {
+		if (self.position >= self.fail_at) return error.ReaderFailure;
+		if (self.position >= self.data.len) return 0;
+		const count = @min(buffer.len, @min(self.data.len - self.position, self.fail_at - self.position));
+		@memcpy(buffer[0..count], self.data[self.position .. self.position + count]);
+		self.position += count;
+		return count;
+	}
+};
+
+const FailingWriter = struct {
+	pub fn write(_: *FailingWriter, _: []const u8) error{WriterFailure}!usize {
+		return error.WriterFailure;
+	}
+};
+
+test "streaming output limit rejects block before publishing it" {
+	const allocator = testing.allocator;
+	const plain = "firmware payload" ** 100;
+	const compressed = try bzip2.compress(allocator, plain);
+	defer allocator.free(compressed);
+
+	var input: std.Io.Reader = .fixed(compressed);
+	var output: std.ArrayListUnmanaged(u8) = .empty;
+	defer output.deinit(allocator);
+	var allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &output);
+	defer output = allocating.toArrayList();
+
+	try testing.expectError(
+		bzip2.Error.OutputLimitExceeded,
+		bzip2.decompressStream(allocator, &input, &allocating.writer, .{
+			.stream_mode = .single,
+			.max_output_bytes = plain.len - 1,
+		}),
+	);
+	try testing.expectEqual(@as(usize, 0), allocating.writer.buffered().len);
+}
+
+test "streaming preserves writer failure" {
+	const allocator = testing.allocator;
+	const compressed = try bzip2.compress(allocator, "writer failure propagation");
+	defer allocator.free(compressed);
+
+	var input: std.Io.Reader = .fixed(compressed);
+	var output = FailingWriter{};
+	try testing.expectError(
+		error.WriterFailure,
+		bzip2.decompressStream(allocator, &input, &output, .{ .stream_mode = .single }),
+	);
+}
+
+test "streaming preserves reader failure" {
+	const allocator = testing.allocator;
+	const compressed = try bzip2.compress(allocator, "reader failure propagation");
+	defer allocator.free(compressed);
+
+	var input = FailingReader{ .data = compressed, .fail_at = 8 };
+	var output: std.ArrayListUnmanaged(u8) = .empty;
+	defer output.deinit(allocator);
+	var allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &output);
+	defer output = allocating.toArrayList();
+
+	try testing.expectError(
+		error.ReaderFailure,
+		bzip2.decompressStream(allocator, &input, &allocating.writer, .{ .stream_mode = .single }),
+	);
+}
+
+test "single stream mode rejects trailing and concatenated data" {
+	const allocator = testing.allocator;
+	const compressed = try bzip2.compress(allocator, "one stream");
+	defer allocator.free(compressed);
+	const with_trailing = try std.mem.concat(allocator, u8, &.{ compressed, "x" });
+	defer allocator.free(with_trailing);
+
+	var input: std.Io.Reader = .fixed(with_trailing);
+	var output: std.ArrayListUnmanaged(u8) = .empty;
+	defer output.deinit(allocator);
+	var allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &output);
+	defer output = allocating.toArrayList();
+
+	try testing.expectError(
+		bzip2.Error.TrailingData,
+		bzip2.decompressStream(allocator, &input, &allocating.writer, .{ .stream_mode = .single }),
+	);
+}
+
+test "streaming concatenated streams require explicit mode" {
+	const allocator = testing.allocator;
+	const first = try bzip2.compress(allocator, "first");
+	defer allocator.free(first);
+	const second = try bzip2.compress(allocator, "second");
+	defer allocator.free(second);
+	const concatenated = try std.mem.concat(allocator, u8, &.{ first, second });
+	defer allocator.free(concatenated);
+
+	var strict_input: std.Io.Reader = .fixed(concatenated);
+	var strict_output: std.ArrayListUnmanaged(u8) = .empty;
+	defer strict_output.deinit(allocator);
+	var strict_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &strict_output);
+	defer strict_output = strict_allocating.toArrayList();
+	try testing.expectError(
+		bzip2.Error.TrailingData,
+		bzip2.decompressStream(allocator, &strict_input, &strict_allocating.writer, .{}),
+	);
+
+	var input: std.Io.Reader = .fixed(concatenated);
+	var output: std.ArrayListUnmanaged(u8) = .empty;
+	defer output.deinit(allocator);
+	var allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &output);
+	defer output = allocating.toArrayList();
+	try bzip2.decompressStream(allocator, &input, &allocating.writer, .{ .stream_mode = .concatenated });
+	try testing.expectEqualStrings("firstsecond", allocating.writer.buffered());
+}
+
+test "streaming reports truncation" {
+	const allocator = testing.allocator;
+	const compressed = try bzip2.compress(allocator, "truncated stream");
+	defer allocator.free(compressed);
+
+	var input: std.Io.Reader = .fixed(compressed[0 .. compressed.len - 1]);
+	var output: std.ArrayListUnmanaged(u8) = .empty;
+	defer output.deinit(allocator);
+	var allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &output);
+	defer output = allocating.toArrayList();
+	try testing.expectError(
+		bzip2.Error.UnexpectedEof,
+		bzip2.decompressStream(allocator, &input, &allocating.writer, .{ .stream_mode = .single }),
+	);
+}
+
+test "streaming distinguishes block and stream CRC corruption" {
+	const allocator = testing.allocator;
+	const compressed = try bzip2.compress(allocator, "CRC corruption");
+	defer allocator.free(compressed);
+
+	const bad_block = try allocator.dupe(u8, compressed);
+	defer allocator.free(bad_block);
+	bad_block[10] ^= 1;
+	try testing.expectError(
+		bzip2.Error.BlockCrcMismatch,
+		bzip2.decompress(allocator, bad_block),
+	);
+
+	const bad_stream = try allocator.dupe(u8, compressed);
+	defer allocator.free(bad_stream);
+	bad_stream[bad_stream.len - 1] ^= 0x80;
+	try testing.expectError(
+		bzip2.Error.StreamCrcMismatch,
+		bzip2.decompress(allocator, bad_stream),
+	);
+}
+
 // ============ Real-World File Tests ============
 
 test "decompress real bzip2 file from tmp" {

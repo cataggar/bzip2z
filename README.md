@@ -19,7 +19,7 @@ Clean-room, pure Zig reimplementation of bzip2 with a focus on correctness, clar
 
 ## Architecture
 
-- Core: `src/core.zig` exposes memory-only compression/decompression APIs.
+- Core: `src/core.zig` exposes memory and reader/writer decompression APIs.
 - Adapter: `src/ffi.zig` exports a C ABI (`c/include/bzip2z.h`) for external callers.
 - CLI: `c/cli.c` handles path/stdin/stdout behavior and calls only the FFI surface.
 
@@ -48,6 +48,12 @@ This implementation replaces the original block-sorting logic with a clean, effi
 - Default behavior remains standard single-stream bzip2 for maximum compatibility and streaming support.
 
 For file inputs with `-j`, the CLI streams output in order while decoding streams in parallel (no full-file slurp).
+
+For bounded materialization, use `decompressStream` with caller-owned I/O and an
+allocator. Set `.stream_mode = .single` to reject trailing or concatenated data,
+and `.max_output_bytes` to reject a block before publishing bytes beyond the
+limit. Use `.stream_mode = .concatenated` only when concatenated streams are
+expected. Reader and writer errors are returned unchanged.
 
 ## Benchmarks
 
@@ -355,6 +361,14 @@ pub fn main() !void {
 		.parallel = true,
 	});
 	defer allocator.free(decompressed);
+
+	var reader: std.Io.Reader = .fixed(compressed);
+	var output: [1024]u8 = undefined;
+	var writer: std.Io.Writer = .fixed(&output);
+	try bzip2.decompressStream(allocator, &reader, &writer, .{
+		.stream_mode = .single,
+		.max_output_bytes = output.len,
+	});
 }
 ```
 
