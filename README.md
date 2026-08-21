@@ -23,6 +23,18 @@ Clean-room, pure Zig reimplementation of bzip2 with a focus on correctness, clar
 - Adapter: `src/ffi.zig` exports a C ABI (`c/include/bzip2z.h`) for external callers.
 - CLI: `c/cli.c` handles path/stdin/stdout behavior and calls only the FFI surface.
 
+## Library dependency
+
+Downstream Zig packages can import the `bzip2z` module without fetching or building
+the CLI-only `progrez` dependency. CLI executables are disabled by default when
+`bzip2z` is used as a package dependency.
+
+To build only the libraries from this repository, run:
+
+```
+zig build -Dcli=false
+```
+
 ## Algorithmic improvements
 
 This implementation replaces the original block-sorting logic with a clean, efficient SA-IS suffix array construction for the Burrows–Wheeler Transform. SA-IS provides linear-time suffix array construction in practice, which reduces time spent in block sorting and improves throughput on large and repetitive inputs.
