@@ -213,6 +213,23 @@ const FailingWriter = struct {
 	}
 };
 
+const ZeroProgressWriter = struct {
+	buffer: [64]u8 = undefined,
+	written: usize = 0,
+	return_zero: bool = true,
+
+	pub fn write(self: *ZeroProgressWriter, data: []const u8) !usize {
+		if (self.return_zero) {
+			self.return_zero = false;
+			return 0;
+		}
+		const count = @min(data.len, self.buffer.len - self.written);
+		@memcpy(self.buffer[self.written..][0..count], data[0..count]);
+		self.written += count;
+		return count;
+	}
+};
+
 test "streaming output limit rejects block before publishing it" {
 	const allocator = testing.allocator;
 	const plain = "firmware payload" ** 100;
@@ -246,6 +263,18 @@ test "streaming preserves writer failure" {
 		error.WriterFailure,
 		bzip2.decompressStream(allocator, &input, &output, .{ .stream_mode = .single }),
 	);
+}
+
+test "streaming retries a zero-progress write" {
+	const allocator = testing.allocator;
+	const plain = "zero-progress writer";
+	const compressed = try bzip2.compress(allocator, plain);
+	defer allocator.free(compressed);
+
+	var input: std.Io.Reader = .fixed(compressed);
+	var output = ZeroProgressWriter{};
+	try bzip2.decompressStream(allocator, &input, &output, .{ .stream_mode = .single });
+	try testing.expectEqualStrings(plain, output.buffer[0..output.written]);
 }
 
 test "streaming preserves reader failure" {

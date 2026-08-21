@@ -290,7 +290,6 @@ fn writeAllAny(writer: anytype, buffer: []const u8) anyerror!void {
 	var offset: usize = 0;
 	while (offset < buffer.len) {
 		const written = try writeAny(writer, buffer[offset..]);
-		if (written == 0) return error.WriteFailed;
 		offset += written;
 	}
 }
