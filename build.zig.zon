@@ -16,6 +16,7 @@
 		.progrez = .{
 			.url = "https://github.com/pmarreck/progrez/archive/7d70ce8.tar.gz",
 			.hash = "progrez-0.1.0-0YJXrpMFAgARHkoD6RpFfS8kNgQEiYNu2ZbswsuBm2hf",
+			.lazy = true,
 		},
 	},
 }
