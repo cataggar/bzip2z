@@ -41,6 +41,19 @@ fn expectInteropDecode(compressed: []const u8, expected: []const u8) !void {
     try testing.expectEqualSlices(u8, expected, decoded);
 }
 
+fn expectStreamingDecode(compressed: []const u8, expected: []const u8, stream_mode: bzip2.StreamMode) !void {
+    var input: std.Io.Reader = .fixed(compressed);
+    var output: std.ArrayListUnmanaged(u8) = .empty;
+    defer output.deinit(testing.allocator);
+    var allocating: std.Io.Writer.Allocating = .fromArrayList(testing.allocator, &output);
+    defer output = allocating.toArrayList();
+
+    try bzip2.decompressStream(testing.allocator, &input, &allocating.writer, .{
+        .stream_mode = stream_mode,
+    });
+    try testing.expectEqualSlices(u8, expected, allocating.writer.buffered());
+}
+
 fn findBits(data: []const u8, pattern: u48) ?usize {
     if (data.len * 8 < 48) return null;
     var bit_index: usize = 32;
@@ -154,4 +167,37 @@ test "libbz2 fixture validates invalid magic and trailing bytes" {
     const short_trailing = try std.mem.concat(allocator, u8, &.{ fixture, &.{ 0xaa, 0xbb, 0xcc } });
     defer allocator.free(short_trailing);
     try expectInteropDecode(short_trailing, interop_text_line ** 256);
+
+    var input: std.Io.Reader = .fixed(short_trailing);
+    var output: std.ArrayListUnmanaged(u8) = .empty;
+    defer output.deinit(allocator);
+    var allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &output);
+    defer output = allocating.toArrayList();
+    try testing.expectError(
+        bzip2.Error.TrailingData,
+        bzip2.decompressStream(allocator, &input, &allocating.writer, .{ .stream_mode = .single }),
+    );
+}
+
+test "libbz2 concatenated fixtures require explicit streaming mode" {
+    const allocator = testing.allocator;
+    const fixture = @embedFile("testdata/libbz2-1.0.8-text.bz2");
+    const concatenated = try std.mem.concat(allocator, u8, &.{ fixture, fixture });
+    defer allocator.free(concatenated);
+
+    var input: std.Io.Reader = .fixed(concatenated);
+    var output: std.ArrayListUnmanaged(u8) = .empty;
+    defer output.deinit(allocator);
+    var allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &output);
+    defer output = allocating.toArrayList();
+    try testing.expectError(
+        bzip2.Error.TrailingData,
+        bzip2.decompressStream(allocator, &input, &allocating.writer, .{ .stream_mode = .single }),
+    );
+
+    try expectStreamingDecode(
+        concatenated,
+        (interop_text_line ** 256) ++ (interop_text_line ** 256),
+        .concatenated,
+    );
 }
