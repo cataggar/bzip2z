@@ -24,4 +24,5 @@ test "version" {
 
 test {
 	_ = @import("bzip2_test.zig");
+	_ = @import("interop_test.zig");
 }
