@@ -1,6 +1,7 @@
 const std = @import("std");
 const bzip2 = @import("bzip2.zig");
 const testing = std.testing;
+const repeat = @import("test_data.zig").repeat;
 
 const interop_text_line = "Firmware image compatibility vector: bzip2 1.0.8 / bzip2z.\n";
 const interop_firmware_size = 1_200_000;
@@ -96,7 +97,7 @@ test "decode deterministic libbz2 1.0.8 compatibility fixtures" {
 
 test "single-stream compression is byte-compatible with libbz2 1.0.8" {
     const allocator = testing.allocator;
-    const input = [_]u8{0xa5} ** 100;
+    const input: [100]u8 = @splat(0xa5);
 
     const compressed = try bzip2.compressWithOptions(allocator, &input, .{
         .level = 9,
@@ -166,7 +167,7 @@ test "libbz2 fixture validates invalid magic and trailing bytes" {
 
     const short_trailing = try std.mem.concat(allocator, u8, &.{ fixture, &.{ 0xaa, 0xbb, 0xcc } });
     defer allocator.free(short_trailing);
-    try expectInteropDecode(short_trailing, interop_text_line ** 256);
+    try expectInteropDecode(short_trailing, repeat(interop_text_line, 256));
 
     var input: std.Io.Reader = .fixed(short_trailing);
     var output: std.ArrayListUnmanaged(u8) = .empty;
@@ -197,7 +198,7 @@ test "libbz2 concatenated fixtures require explicit streaming mode" {
 
     try expectStreamingDecode(
         concatenated,
-        (interop_text_line ** 256) ++ (interop_text_line ** 256),
+        repeat(interop_text_line, 512),
         .concatenated,
     );
 }

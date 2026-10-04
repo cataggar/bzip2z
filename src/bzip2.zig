@@ -407,11 +407,11 @@ const HuffmanTable = struct {
 
 	pub fn init() HuffmanTable {
 		return .{
-			.limits = [_]u32{0} ** (MAX_CODE_LEN + 2),
-			.bases = [_]u32{0} ** (MAX_CODE_LEN + 2),
-			.perms = [_]u16{0} ** MAX_ALPHA_SIZE,
-			.fast_symbols = [_]u16{0} ** HUFF_FAST_SIZE,
-			.fast_lengths = [_]u8{0} ** HUFF_FAST_SIZE,
+			.limits = @splat(0),
+			.bases = @splat(0),
+			.perms = @splat(0),
+			.fast_symbols = @splat(0),
+			.fast_lengths = @splat(0),
 		};
 	}
 
@@ -420,7 +420,7 @@ const HuffmanTable = struct {
 		if (num_symbols == 0) return;
 
 		// Count codes of each length
-		var count: [MAX_CODE_LEN + 1]u32 = [_]u32{0} ** (MAX_CODE_LEN + 1);
+		var count: [MAX_CODE_LEN + 1]u32 = @splat(0);
 		var min_len: usize = MAX_CODE_LEN;
 		var max_len: usize = 0;
 
@@ -573,12 +573,12 @@ pub const Decompressor = struct {
 			.stored_block_crc = 0,
 			.bwt_primary_index = 0,
 			.tt = tt,
-			.huffman_tables = [_]HuffmanTable{HuffmanTable.init()} ** MAX_GROUPS,
+			.huffman_tables = @splat(HuffmanTable.init()),
 			.num_groups = 0,
 			.selectors = selectors,
 			.num_selectors = 0,
-			.in_use = [_]bool{false} ** 256,
-			.seq_to_unseq = [_]u8{0} ** 256,
+			.in_use = @splat(false),
+			.seq_to_unseq = @splat(0),
 			.num_in_use = 0,
 			.stream_crc = 0,
 			.block_randomized = false,
@@ -808,7 +808,7 @@ pub const Decompressor = struct {
 		const alpha_size = self.num_in_use + 2; // +2 for RUNA and RUNB
 
 		for (0..self.num_groups) |group| {
-			var lengths: [MAX_ALPHA_SIZE]u8 = [_]u8{0} ** MAX_ALPHA_SIZE;
+			var lengths: [MAX_ALPHA_SIZE]u8 = @splat(0);
 
 			// Read initial code length (5 bits)
 			var curr_len: i32 = @intCast(try bits.readBits(5));
@@ -1086,7 +1086,7 @@ pub const Decompressor = struct {
 		// Position fits in 24 bits (max block size = 900,000 < 16,777,216).
 
 		// First pass: count occurrences of each byte
-		var counts: [256]u32 = [_]u32{0} ** 256;
+		var counts: [256]u32 = @splat(0);
 		for (self.block[0..self.block_size]) |byte| {
 			counts[byte] += 1;
 		}
@@ -1294,15 +1294,15 @@ pub fn buildSuffixArraySAIS(allocator: Allocator, text: []const u8) ![]u32 {
 	}.check;
 
 	// Count character frequencies (including sentinel = 0)
-	var bucket_sizes: [257]u32 = [_]u32{0} ** 257;
+	var bucket_sizes: [257]u32 = @splat(0);
 	bucket_sizes[0] = 1; // Sentinel
 	for (text) |c| {
 		bucket_sizes[@as(usize, c) + 1] += 1;
 	}
 
 	// Calculate bucket boundaries
-	var bucket_starts: [257]u32 = [_]u32{0} ** 257;
-	var bucket_ends: [257]u32 = [_]u32{0} ** 257;
+	var bucket_starts: [257]u32 = @splat(0);
+	var bucket_ends: [257]u32 = @splat(0);
 	var sum: u32 = 0;
 	for (0..257) |c| {
 		bucket_starts[c] = sum;
@@ -2002,7 +2002,7 @@ pub fn BitWriter(comptime WriterType: type) type {
 /// Build Huffman code lengths from symbol frequencies.
 /// Returns array of code lengths (0 = symbol not used).
 pub fn buildHuffmanLengths(freqs: []const u32, num_symbols: usize) [MAX_ALPHA_SIZE]u8 {
-	var lengths: [MAX_ALPHA_SIZE]u8 = [_]u8{0} ** MAX_ALPHA_SIZE;
+	var lengths: [MAX_ALPHA_SIZE]u8 = @splat(0);
 
 	if (num_symbols == 0) return lengths;
 
@@ -2067,7 +2067,7 @@ pub fn buildHuffmanLengths(freqs: []const u32, num_symbols: usize) [MAX_ALPHA_SI
 /// Uses a simplified heap-based algorithm, then limits lengths to max_len.
 /// Returns code lengths for each symbol (0 for unused symbols).
 fn computeHuffmanLengths(freqs: []const u32, num_symbols: usize, max_len: u8) [MAX_ALPHA_SIZE]u8 {
-	var lengths: [MAX_ALPHA_SIZE]u8 = [_]u8{0} ** MAX_ALPHA_SIZE;
+	var lengths: [MAX_ALPHA_SIZE]u8 = @splat(0);
 
 	if (num_symbols == 0) return lengths;
 	if (num_symbols == 1) {
@@ -2106,7 +2106,7 @@ fn computeHuffmanLengths(freqs: []const u32, num_symbols: usize, max_len: u8) [M
 	var num_nodes: usize = 0;
 
 	// Initialize leaf nodes for used symbols
-	var symbol_to_node: [MAX_ALPHA_SIZE]u16 = [_]u16{0xFFFF} ** MAX_ALPHA_SIZE;
+	var symbol_to_node: [MAX_ALPHA_SIZE]u16 = @splat(0xFFFF);
 	for (freqs[0..num_symbols], 0..) |f, i| {
 		if (f > 0) {
 			symbol_to_node[i] = @intCast(num_nodes);
@@ -2292,10 +2292,10 @@ fn computeHuffmanLengths(freqs: []const u32, num_symbols: usize, max_len: u8) [M
 /// Build canonical Huffman codes from lengths.
 /// Returns array of codes corresponding to each symbol.
 pub fn buildHuffmanCodes(lengths: []const u8, num_symbols: usize) [MAX_ALPHA_SIZE]u32 {
-	var codes: [MAX_ALPHA_SIZE]u32 = [_]u32{0} ** MAX_ALPHA_SIZE;
+	var codes: [MAX_ALPHA_SIZE]u32 = @splat(0);
 
 	// Count codes of each length
-	var count: [MAX_CODE_LEN + 1]u32 = [_]u32{0} ** (MAX_CODE_LEN + 1);
+	var count: [MAX_CODE_LEN + 1]u32 = @splat(0);
 	for (lengths[0..num_symbols]) |len| {
 		if (len > 0 and len <= MAX_CODE_LEN) {
 			count[len] += 1;
@@ -2303,7 +2303,7 @@ pub fn buildHuffmanCodes(lengths: []const u8, num_symbols: usize) [MAX_ALPHA_SIZ
 	}
 
 	// Compute first code of each length
-	var first_code: [MAX_CODE_LEN + 2]u32 = [_]u32{0} ** (MAX_CODE_LEN + 2);
+	var first_code: [MAX_CODE_LEN + 2]u32 = @splat(0);
 	var code: u32 = 0;
 	for (1..MAX_CODE_LEN + 1) |len| {
 		first_code[len] = code;
@@ -2402,7 +2402,7 @@ fn prepareBlock(allocator: Allocator, input: []const u8) !BlockPrepared {
 	const bwt_result = try bwtEncode(allocator, rle_data);
 	defer allocator.free(bwt_result.data);
 
-	var in_use = [_]bool{false} ** 256;
+	var in_use: [256]bool = @splat(false);
 	for (bwt_result.data) |b| {
 		in_use[b] = true;
 	}
@@ -2470,7 +2470,7 @@ fn prepareBlock(allocator: Allocator, input: []const u8) !BlockPrepared {
 	try symbols.append(allocator, eob);
 
 	const alpha_size = num_in_use + 2;
-	var freqs: [MAX_ALPHA_SIZE]u32 = [_]u32{0} ** MAX_ALPHA_SIZE;
+	var freqs: [MAX_ALPHA_SIZE]u32 = @splat(0);
 	for (symbols.items) |s| {
 		freqs[s] += 1;
 	}
@@ -3360,7 +3360,7 @@ const FileSliceReader = struct {
 		};
 	}
 
-	fn read(self: *FileSliceReader, buffer: []u8) !usize {
+	pub fn read(self: *FileSliceReader, buffer: []u8) !usize {
 		if (self.pos >= self.end) return 0;
 		const remaining = self.end - self.pos;
 		const max_len: usize = @intCast(@min(@as(u64, buffer.len), remaining));
@@ -4303,7 +4303,7 @@ test "Huffman encode-decode round-trip" {
 	const allocator = std.testing.allocator;
 
 	// Build codes with known lengths
-	const lengths = [_]u8{ 2, 2, 3, 3, 0, 0, 0, 0 } ++ [_]u8{0} ** (MAX_ALPHA_SIZE - 8);
+	const lengths = [_]u8{ 2, 2, 3, 3, 0, 0, 0, 0 } ++ @as([MAX_ALPHA_SIZE - 8]u8, @splat(0));
 	const codes = buildHuffmanCodes(&lengths, 4);
 
 	// Write symbols using BitWriter
@@ -4403,7 +4403,7 @@ test "compress round-trip - binary" {
 
 test "compress calls on_progress callback" {
 	const allocator = std.testing.allocator;
-	const input = "Hello, world! This is a test of progress callbacks." ** 100;
+	const input = @import("test_data.zig").repeat("Hello, world! This is a test of progress callbacks.", 100);
 
 	const State = struct {
 		call_count: usize = 0,
@@ -4433,7 +4433,7 @@ test "compress calls on_progress callback" {
 
 test "decompress calls on_progress callback" {
 	const allocator = std.testing.allocator;
-	const input = "Decompress progress test data string repeating." ** 50;
+	const input = @import("test_data.zig").repeat("Decompress progress test data string repeating.", 50);
 
 	const compressed = try compressWithOptions(allocator, input, .{ .level = 1 });
 	defer allocator.free(compressed);

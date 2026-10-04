@@ -4,6 +4,7 @@
 const std = @import("std");
 const bzip2 = @import("bzip2.zig");
 const testing = std.testing;
+const repeat = @import("test_data.zig").repeat;
 
 var tmp_counter = std.atomic.Value(usize).init(0);
 
@@ -57,7 +58,7 @@ const MaxAllocAllocator = struct {
 };
 
 fn testIo() std.Io {
-	return std.Io.Threaded.global_single_threaded.io();
+	return std.testing.io;
 }
 
 /// Write all bytes to a file. Replaces the pre-0.16 `fileWriteAll(file, data)` call.
@@ -72,7 +73,7 @@ fn fileWriteAll(file: std.Io.File, data: []const u8) !void {
 fn fileReadAll(allocator: std.mem.Allocator, file: std.Io.File, max: usize) ![]u8 {
 	var buf: [4096]u8 = undefined;
 	var r = file.reader(testIo(), &buf);
-	return try r.interface.readAlloc(allocator, max);
+	return try r.interface.allocRemaining(allocator, .limited(max));
 }
 
 /// Lightweight $TMPDIR lookup via libc, returning an allocator-owned copy or null.
@@ -232,7 +233,7 @@ const ZeroProgressWriter = struct {
 
 test "streaming output limit rejects block before publishing it" {
 	const allocator = testing.allocator;
-	const plain = "firmware payload" ** 100;
+	const plain = repeat("firmware payload", 100);
 	const compressed = try bzip2.compress(allocator, plain);
 	defer allocator.free(compressed);
 
@@ -386,13 +387,13 @@ test "decompress real bzip2 file from tmp" {
 	try requireSystemBzip2(allocator);
 
 	// Create a test file, compress it with system bzip2
-	const test_content =
+	const test_content = repeat(
 		\\This is a test file for bzip2 decompression.
 		\\It contains multiple lines of text.
 		\\The quick brown fox jumps over the lazy dog.
 		\\Pack my box with five dozen liquor jugs.
 		\\How vexingly quick daft zebras jump!
-	** 50;
+	, 50);
 
 	// Write to temp file
 	const tmp_path = try tmpPath(allocator, "bzip2_test_input.txt");
@@ -436,7 +437,7 @@ test "round-trip with system bzip2 via files" {
 	const allocator = testing.allocator;
 	try requireSystemBzip2(allocator);
 
-	const test_data = "Hello, World! This is a test of bzip2 compression.\n" ** 10;
+	const test_data = repeat("Hello, World! This is a test of bzip2 compression.\n", 10);
 
 	// Write test data to temp file
 	const tmp_path = try tmpPath(allocator, "bzip2_roundtrip_test.txt");
@@ -486,7 +487,7 @@ test "decompress system bzip2 output - simple text" {
 	const allocator = testing.allocator;
 	try requireSystemBzip2(allocator);
 
-	const test_data = "Hello, World! This is a test of bzip2 decompression.\n" ** 5;
+	const test_data = repeat("Hello, World! This is a test of bzip2 decompression.\n", 5);
 
 	// Write test data to temp file
 	const tmp_path = try tmpPath(allocator, "bzip2_decompress_test.txt");
@@ -548,7 +549,7 @@ test "decompress system bzip2 output - multiple patterns" {
 		// Mixed case with punctuation
 		"The quick brown fox jumps over the lazy dog.",
 		// Repeated string (tests RLE)
-		"Lorem ipsum dolor sit amet. " ** 10,
+		repeat("Lorem ipsum dolor sit amet. ", 10),
 		// Binary-like pattern with all bytes in ASCII range
 		"Hello123!@#$%^&*()_+-=[]{}|;:',.<>?/~`",
 	};

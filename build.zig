@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
 	const target = b.standardTargetOptions(.{});
-	const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Optimization mode (default: ReleaseFast)") orelse .ReleaseFast;
+	const optimize = b.option(std.builtin.Optimize, "optimize", "Optimization mode (default: fast)") orelse .fast;
 
 	const lib_mod = b.addModule("bzip2z", .{
 		.root_source_file = b.path("src/lib.zig"),
@@ -109,7 +109,7 @@ pub fn build(b: *std.Build) void {
 fn addCliExecutables(
 	b: *std.Build,
 	target: std.Build.ResolvedTarget,
-	optimize: std.builtin.OptimizeMode,
+	optimize: std.builtin.Optimize,
 	ffi_lib: *std.Build.Step.Compile,
 ) void {
 	const is_windows = target.result.os.tag == .windows;
@@ -188,9 +188,7 @@ fn addCliExecutables(
 
 	const run_cli = b.addRunArtifact(cli);
 	run_cli.step.dependOn(b.getInstallStep());
-	if (b.args) |args| {
-		run_cli.addArgs(args);
-	}
+	run_cli.addPassthruArgs();
 	const run_step = b.step("run", "Run bzip2z CLI");
 	run_step.dependOn(&run_cli.step);
 }

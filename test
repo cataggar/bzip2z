@@ -2,10 +2,11 @@
 set -euo pipefail
 
 if [ -z "${ZIG_GLOBAL_CACHE_DIR:-}" ]; then
-	zig_global_cache_dir="${TMPDIR:-/tmp}/zig-global-cache"
+	zig_global_cache_dir="$PWD/.zig-cache/global"
 	export ZIG_GLOBAL_CACHE_DIR="$zig_global_cache_dir"
 fi
 
-zig build test
+zig build -j2 test bench fuzz
+zig build -j2
 
-./tests/cli_test
+SKIP_BUILD=1 ./tests/cli_test
