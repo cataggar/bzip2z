@@ -16,10 +16,42 @@
 			devSystems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
 			ciHostSystems = [ "x86_64-linux" ];
 			allBuildSystems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
-			zigFor = system: zig-overlay.packages.${system}."0.16.0";
+			zigFor = system:
+				let
+					pkgs = import nixpkgs { inherit system; };
+					platform = {
+						"x86_64-linux" = {
+							name = "x86_64-linux";
+							hash = "sha256-HL6d+fJ+a3jRTMvKQ7ZwOkBO957xxGPekB1/CI1OICY=";
+						};
+						"aarch64-linux" = {
+							name = "aarch64-linux";
+							hash = "sha256-no0RZh1K471XcCo4MngeI60VHd5XmOFqXM1QP2UjT/g=";
+						};
+						"aarch64-darwin" = {
+							name = "aarch64-macos";
+							hash = "sha256-tgfpuSNHkKAIEWrlvbccYkO4S5+0KlOp5w/eQcBsU2o=";
+						};
+					}.${system};
+				in pkgs.stdenvNoCC.mkDerivation {
+					pname = "zig";
+					version = "0.17.0";
+					src = pkgs.fetchurl {
+						url = "https://github.com/cataggar/zig/releases/download/v0.17.0/zig-${platform.name}-0.17.0.tar.xz";
+						inherit (platform) hash;
+					};
+					dontConfigure = true;
+					dontBuild = true;
+					dontFixup = true;
+					installPhase = ''
+						mkdir -p "$out/bin"
+						cp -R zig lib doc "$out/"
+						ln -s "$out/zig" "$out/bin/zig"
+					'';
+				};
 			forSystems = systems: f: nixpkgs.lib.genAttrs systems (system: f system (import nixpkgs { inherit system; }) (zigFor system));
 
-			zigDepsHash = "sha256-KrwTu200E7aiyP2PUTQLx6umntZTBWBxt3Bohx0wyBM=";
+			zigDepsHash = "sha256-1UGv8Xn6ZoJvwdNWu0Fcn5uAWZ8467/3R/1f12P+gN4=";
 
 			mkZigDeps = pkgs: zig: pkgs.stdenv.mkDerivation {
 				pname = "${pname}-zig-deps";
@@ -31,7 +63,8 @@
 				outputHash = zigDepsHash;
 				buildPhase = ''
 					export HOME=$TMPDIR
-					export ZIG_GLOBAL_CACHE_DIR=$out
+					export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
+					export ZIG_LOCAL_PKG_DIR=$out
 					export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
 					export GIT_SSL_CAINFO=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
 					zig build --fetch=all
@@ -67,13 +100,15 @@
 						export HOME="$TMPDIR/home"
 						mkdir -p "$HOME"
 						export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+						export ZIG_LOCAL_PKG_DIR="$TMPDIR/zig-pkg"
 						mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
-						cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
-						chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
+						mkdir -p "$ZIG_LOCAL_PKG_DIR"
+						cp -r ${zigDeps}/* "$ZIG_LOCAL_PKG_DIR/"
+						chmod -R u+w "$ZIG_LOCAL_PKG_DIR"
 						${if runTests then ''
 						# On Linux, Zig with link_libc bakes /lib64/ld-linux-x86-64.so.2
 						# as the dynamic linker, which doesn't exist in the Nix sandbox.
-						# patchelf 0.18 aborts on Zig 0.16 ELFs and -Ddynamic-linker
+						# patchelf 0.18 aborts on Zig ELFs and -Ddynamic-linker
 						# breaks shared-lib subcompilation. Instead, compile artifacts
 						# and run each via Nix's loader directly. The CLI gets a thin
 						# shell wrapper so test_cli's $cli invocations work unchanged.
@@ -116,7 +151,7 @@ WRAPPER
 						SKIP_BUILD=1 bash tests/cli_test
 						''}
 						'' else ":"}
-						zig build -Doptimize=ReleaseFast -Dtarget=${zigTarget}
+						zig build -Doptimize=fast -Dtarget=${zigTarget}
 						runHook postBuild
 					'';
 

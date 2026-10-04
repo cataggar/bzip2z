@@ -5,6 +5,9 @@
 
 Clean-room, pure Zig reimplementation of bzip2 with a focus on correctness, clarity, and performance. Designed as a library dependency and a drop-in CLI replacement.
 
+Requires Zig 0.17.0. Optimization modes are `debug`, `safe`, `fast` (the
+default), and `small`, for example `zig build -Doptimize=fast`.
+
 ## Highlights
 
 - Pure Zig bzip2 core with SA-IS suffix array construction for BWT.
@@ -60,7 +63,7 @@ expected. Reader and writer errors are returned unchanged.
 A benchmark tool is included to compare Zig bzip2 vs system bzip2:
 
 ```
-./build -Doptimize=ReleaseFast bench
+zig build -Doptimize=fast bench
 ./zig-out/bin/bench-bzip2 --size 1M --pattern mixed --iterations 3 --threads 1
 ```
 

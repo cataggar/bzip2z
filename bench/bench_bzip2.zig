@@ -12,8 +12,10 @@ const bzip2 = @import("bzip2z").bzip2;
 const Allocator = std.mem.Allocator;
 var tmp_counter = std.atomic.Value(usize).init(0);
 
+var process_io: std.Io = undefined;
+
 fn benchIo() std.Io {
-	return std.Io.Threaded.global_single_threaded.io();
+	return if (@import("builtin").is_test) std.testing.io else process_io;
 }
 
 fn nowNs() i128 {
@@ -270,7 +272,7 @@ const BenchResult = struct {
 /// Benchmark our Zig bzip2 implementation
 fn benchZigBzip2(data: []const u8, options: bzip2.CompressOptions) !BenchResult {
 	// Use standard allocator (memory tracking via GPA is unreliable across Zig versions)
-	var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+	var gpa: std.heap.DebugAllocator(.{}) = .init;
 	defer _ = gpa.deinit();
 	const allocator = gpa.allocator();
 
@@ -432,12 +434,13 @@ fn formatSize(size: usize) struct { value: f64, unit: []const u8 } {
 	}
 }
 
-pub fn main() !u8 {
-	var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) !u8 {
+	process_io = init.io;
+	var gpa: std.heap.DebugAllocator(.{}) = .init;
 	defer _ = gpa.deinit();
 	const allocator = gpa.allocator();
 
-	var args_iter = try std.process.argsWithAllocator(allocator);
+	var args_iter = try init.minimal.args.iterateAllocator(allocator);
 	defer args_iter.deinit();
 
 	const args = parseArgs(&args_iter) catch |err| {

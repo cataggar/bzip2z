@@ -60,11 +60,11 @@ jobs:
           determinate: false
 
       - name: Build target artifacts
-        run: nix develop -c zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.zig_target }}
+        run: nix develop -c zig build -j2 -Doptimize=fast -Dtarget=${{ matrix.zig_target }}
 
       - name: Compile target tests
         if: matrix.compile_tests
-        run: nix develop -c zig build test-compile -Doptimize=ReleaseFast -Dtarget=${{ matrix.zig_target }}
+        run: nix develop -c zig build test-compile -j2 -Doptimize=fast -Dtarget=${{ matrix.zig_target }}
 
       - name: Stage artifacts
         run: |
