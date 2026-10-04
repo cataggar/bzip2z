@@ -1,22 +1,22 @@
 .{
-	.name = .bzip2z,
-	.version = "0.1.0",
-	.minimum_zig_version = "0.16.0",
-	.paths = .{
-		"build.zig",
-		"build.zig.zon",
-		"src",
-		"cli",
-		"bench",
-		"fuzz",
-		"tests",
-	},
-	.fingerprint = 0x8e3eb16965d939b,
-	.dependencies = .{
-		.progrez = .{
-			.url = "https://github.com/pmarreck/progrez/archive/7d70ce8.tar.gz",
-			.hash = "progrez-0.1.0-0YJXrpMFAgARHkoD6RpFfS8kNgQEiYNu2ZbswsuBm2hf",
-			.lazy = true,
-		},
-	},
+    .name = .bzip2z,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.17.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "cli",
+        "bench",
+        "fuzz",
+        "tests",
+    },
+    .fingerprint = 0x8e3eb16965d939b,
+    .dependencies = .{
+        .progrez = .{
+            .url = "git+https://github.com/cataggar/progrez#8746a5a9ca18f72c93d2230154001e3f938ccb26",
+            .hash = "progrez-0.1.0-0YJXrpQFAgDUUFpPCz8ezZbULDiC1J4Yl8IEFTDm08mt",
+            .lazy = true,
+        },
+    },
 }

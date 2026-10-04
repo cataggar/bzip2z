@@ -96,7 +96,7 @@ test "decode deterministic libbz2 1.0.8 compatibility fixtures" {
 
 test "single-stream compression is byte-compatible with libbz2 1.0.8" {
     const allocator = testing.allocator;
-    const input = [_]u8{0xa5} ** 100;
+    const input = @as([100]u8, @splat(0xa5));
 
     const compressed = try bzip2.compressWithOptions(allocator, &input, .{
         .level = 9,
@@ -166,7 +166,7 @@ test "libbz2 fixture validates invalid magic and trailing bytes" {
 
     const short_trailing = try std.mem.concat(allocator, u8, &.{ fixture, &.{ 0xaa, 0xbb, 0xcc } });
     defer allocator.free(short_trailing);
-    try expectInteropDecode(short_trailing, interop_text_line ** 256);
+    try expectInteropDecode(short_trailing, repeatedBytes(interop_text_line, 256));
 
     var input: std.Io.Reader = .fixed(short_trailing);
     var output: std.ArrayListUnmanaged(u8) = .empty;
@@ -197,7 +197,20 @@ test "libbz2 concatenated fixtures require explicit streaming mode" {
 
     try expectStreamingDecode(
         concatenated,
-        (interop_text_line ** 256) ++ (interop_text_line ** 256),
+        repeatedBytes(interop_text_line, 256) ++ repeatedBytes(interop_text_line, 256),
         .concatenated,
     );
+}
+
+fn repeatedBytes(comptime pattern: []const u8, comptime count: usize) *const [pattern.len * count:0]u8 {
+    return comptime blk: {
+        @setEvalBranchQuota(1000 + count * 2);
+        var bytes: [pattern.len * count:0]u8 = undefined;
+        for (0..count) |i| {
+            @memcpy(bytes[i * pattern.len ..][0..pattern.len], pattern);
+        }
+        bytes[bytes.len] = 0;
+        const result = bytes;
+        break :blk &result;
+    };
 }

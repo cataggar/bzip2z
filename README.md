@@ -25,6 +25,14 @@ Clean-room, pure Zig reimplementation of bzip2 with a focus on correctness, clar
 
 ## Library dependency
 
+The library source supports Zig 0.17.0. Its bounded streaming, randomized-block
+compatibility, and zero-progress writer behavior are unchanged. Validate without
+the optional CLI dependency using `zig build -j2 -Dcli=false test`.
+The optional progress dependency is pinned to its exact Zig 0.17 source
+compatibility revision. Use direct `zig build` commands on this branch;
+the historical Nix lock/benchmark toolchain is not repinned or validated by
+the consumer-library port. CI is manual-only.
+
 Downstream Zig packages can import the `bzip2z` module without fetching or building
 the CLI-only `progrez` dependency. CLI executables are disabled by default when
 `bzip2z` is used as a package dependency.
