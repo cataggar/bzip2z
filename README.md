@@ -32,6 +32,9 @@ The optional progress dependency is pinned to its exact Zig 0.17 source
 compatibility revision. Use direct `zig build` commands on this branch;
 the historical Nix lock/benchmark toolchain is not repinned or validated by
 the consumer-library port. CI is manual-only.
+The source compatibility change is tracked in
+[PR #8](https://github.com/cataggar/bzip2z/pull/8); optional system-tool tests
+may skip when their tools are unavailable.
 
 Downstream Zig packages can import the `bzip2z` module without fetching or building
 the CLI-only `progrez` dependency. CLI executables are disabled by default when
