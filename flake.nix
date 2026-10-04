@@ -51,7 +51,7 @@
 				};
 			forSystems = systems: f: nixpkgs.lib.genAttrs systems (system: f system (import nixpkgs { inherit system; }) (zigFor system));
 
-			zigDepsHash = "sha256-1UGv8Xn6ZoJvwdNWu0Fcn5uAWZ8467/3R/1f12P+gN4=";
+			zigDepsHash = "sha256-L5by6hgwECjcUQuDp34ZIWB1NomRcVNnv10tLve0amY=";
 
 			mkZigDeps = pkgs: zig: pkgs.stdenv.mkDerivation {
 				pname = "${pname}-zig-deps";
@@ -113,8 +113,8 @@
 						# and run each via Nix's loader directly. The CLI gets a thin
 						# shell wrapper so test_cli's $cli invocations work unchanged.
 						${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
-						zig build test-compile
-						zig build
+						zig build test-compile -j2
+						zig build -j2
 						DL_PATH="$(cat ${pkgs.stdenv.cc}/nix-support/dynamic-linker)"
 						rc=0
 						for f in zig-out/test-bins/*; do
@@ -145,13 +145,13 @@ WRAPPER
 						SKIP_BUILD=1 bash tests/cli_test
 						''}
 						${pkgs.lib.optionalString (!pkgs.stdenv.isLinux) ''
-						zig build test
-						zig build
+						zig build test -j2
+						zig build -j2
 						patchShebangs build tests/cli_test
 						SKIP_BUILD=1 bash tests/cli_test
 						''}
 						'' else ":"}
-						zig build -Doptimize=fast -Dtarget=${zigTarget}
+						zig build -j2 -Doptimize=fast -Dtarget=${zigTarget}
 						runHook postBuild
 					'';
 

@@ -25,6 +25,9 @@ jobs:
       - name: Run full test suite
         run: nix develop -c ./test
 
+      - name: Check the Nix package and dependency cache
+        run: nix build .#ci-tests
+
   build-targets:
     name: build ${{ matrix.name }}
     needs: [test-native]
